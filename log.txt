@@ -1,0 +1,30 @@
+[CHEGADA] Passageiro 0 (baixa)
+[CHEGADA] Passageiro 5 (baixa)
+[CHEGADA] Passageiro 3 (alta)
+[CHEGADA] Passageiro 1 (media)
+[EMBARQUE INICIO] Passageiro 3 | Espera: 0.47s
+[EMBARQUE INICIO] Passageiro 0 | Espera: 0.89s
+[CHEGADA] Passageiro 2 (baixa)
+[CHEGADA] Passageiro 4 (alta)
+[CHEGADA] Passageiro 9 (media)
+[CHEGADA] Passageiro 8 (baixa)
+[CHEGADA] Passageiro 7 (media)
+[EMBARQUE FIM] Passageiro 0 | Duração: 1.22s
+[EMBARQUE INICIO] Passageiro 1 | Espera: 1.54s
+[CHEGADA] Passageiro 6 (baixa)
+[EMBARQUE FIM] Passageiro 3 | Duração: 2.29s
+[EMBARQUE INICIO] Passageiro 5 | Espera: 2.89s
+[EMBARQUE FIM] Passageiro 1 | Duração: 1.34s
+[EMBARQUE INICIO] Passageiro 4 | Espera: 2.37s
+[EMBARQUE FIM] Passageiro 5 | Duração: 1.76s
+[EMBARQUE INICIO] Passageiro 2 | Espera: 3.77s
+[EMBARQUE FIM] Passageiro 4 | Duração: 1.47s
+[EMBARQUE INICIO] Passageiro 9 | Espera: 3.36s
+[EMBARQUE FIM] Passageiro 9 | Duração: 1.68s
+[EMBARQUE INICIO] Passageiro 7 | Espera: 4.85s
+[EMBARQUE FIM] Passageiro 2 | Duração: 1.94s
+[EMBARQUE INICIO] Passageiro 8 | Espera: 4.96s
+[EMBARQUE FIM] Passageiro 8 | Duração: 1.99s
+[EMBARQUE INICIO] Passageiro 6 | Espera: 6.45s
+[EMBARQUE FIM] Passageiro 7 | Duração: 2.65s
+[EMBARQUE FIM] Passageiro 6 | Duração: 2.52s
