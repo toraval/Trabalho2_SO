@@ -1,140 +1,213 @@
+# -*- coding: utf-8 -*-
+"""
+Sistema de Embarque de Passageiros - Aeroporto
+Simulação com processos concorrentes, memória partilhada e semáforos.
+"""
+
+import re
 import time
 import random
+import sys
 from multiprocessing import Process, Queue, Semaphore, Lock, Value
 from datetime import datetime
 
+
+# ─────────────────────────────────────────────
+# CONFIGURAÇÕES
+# ─────────────────────────────────────────────
+TEMPO_MAX_ESPERA  = 5
+NUM_PORTOES       = 2
+TOTAL_PASSAGEIROS = 10
+
 prioridade_ordem = {"alta": 0, "media": 1, "baixa": 2}
 
-TEMPO_MAX_ESPERA = 5  # segundos até desistir
-NUM_PORTOES = 2       # número de portões disponíveis
+# Cores ANSI (terminal)
+COR = {
+    "reset":   "\033[0m",
+    "bold":    "\033[1m",
+    "dim":     "\033[2m",
+    "verde":   "\033[32m",
+    "amarelo": "\033[33m",
+    "vermelho":"\033[31m",
+    "ciano":   "\033[36m",
+    "magenta": "\033[35m",
+    "azul":    "\033[34m",
+    "branco":  "\033[97m",
+}
+
+PREFIXO = {
+    "CHEGADA":         "[ CHEGADA        ]",
+    "EMBARQUE INÍCIO": "[ EMBARQUE INÍCIO]",
+    "EMBARQUE FIM":    "[ EMBARQUE FIM   ]",
+    "DESISTIU":        "[ DESISTÊNCIA    ]",
+    "SERVIDOR":        "[ SERVIDOR       ]",
+    "FILA":            "[ FILA           ]",
+}
+
+COR_EVENTO = {
+    "CHEGADA":         "ciano",
+    "EMBARQUE INÍCIO": "verde",
+    "EMBARQUE FIM":    "verde",
+    "DESISTIU":        "vermelho",
+    "SERVIDOR":        "magenta",
+    "FILA":            "branco",
+}
+
+ICONE_PRIORIDADE = {"alta": "[ALTA]", "media": "[MED]", "baixa": "[BXIA]"}
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+# ─────────────────────────────────────────────
+# UTILITÁRIOS
+# ─────────────────────────────────────────────
+def agora():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def cor_prioridade(p):
+    return {"alta": COR["vermelho"], "media": COR["amarelo"], "baixa": COR["verde"]}[p]
+
+
+def linha_divisoria(char="─", largura=72):
+    return COR["dim"] + char * largura + COR["reset"]
+
+
+def remover_ansi(texto):
+    """Remove todos os códigos de escape ANSI de uma string."""
+    return _ANSI_RE.sub("", texto)
+
+
+def imprimir_e_log(lock, evento, corpo):
+    ts     = f"[{agora()}]"
+    prefx  = PREFIXO.get(evento, f"[ {evento:<15}]")
+    cor_e  = COR.get(COR_EVENTO.get(evento, "branco"), COR["branco"])
+
+    # Linha para o terminal (com cores)
+    linha_terminal = f"{COR['dim']}{ts}{COR['reset']}  {cor_e}{prefx}{COR['reset']}  {corpo}"
+
+    # Linha para o log (texto limpo, sem ANSI)
+    linha_log = f"{ts}  {prefx}  {remover_ansi(corpo)}"
+
+    with lock:
+        print(linha_terminal, flush=True)
+        with open("log.txt", "a", encoding="utf-8") as f:
+            f.write(linha_log + "\n")
+
 
 def gerar_prioridade():
-    return random.choice(["alta", "media", "baixa"])
+    return random.choices(["alta", "media", "baixa"], weights=[20, 40, 40])[0]
 
-# Escrever no log com segurança
-def escrever_log(lock, mensagem):
-    with lock:
-        with open("log.txt", "a") as f:
-            f.write(mensagem + "\n")
 
-# Passageiro (processo cliente)
-def passageiro(id, fila, lock, passageiros_em_espera):
-    time.sleep(random.uniform(0.5, 3))
+# ─────────────────────────────────────────────
+# PROCESSO PASSAGEIRO (cliente)
+# ─────────────────────────────────────────────
+def passageiro(pid, fila, lock, passageiros_em_espera):
+    time.sleep(random.uniform(0.3, 3.0))
 
     prioridade = gerar_prioridade()
-    chegada = time.time()
-    hora_chegada = datetime.now().strftime("%H:%M:%S")
+    chegada    = time.time()
+    cp         = cor_prioridade(prioridade)
+    ip         = ICONE_PRIORIDADE[prioridade]
 
-    msg = f"[CHEGADA] Passageiro {id} | Prioridade: {prioridade} | Hora: {hora_chegada}"
-    print(msg)
-    escrever_log(lock, msg)
+    corpo = (f"Passageiro {COR['bold']}P{pid:02d}{COR['reset']}  "
+             f"Prioridade: {cp}{ip}{COR['reset']}")
+    imprimir_e_log(lock, "CHEGADA", corpo)
 
-    # Incrementar contador partilhado de passageiros em espera
     with passageiros_em_espera.get_lock():
         passageiros_em_espera.value += 1
 
-    fila.put({
-        "id": id,
-        "prioridade": prioridade,
-        "chegada": chegada,
-        "hora_chegada": hora_chegada
-    })
+    fila.put({"id": pid, "prioridade": prioridade, "chegada": chegada})
 
-# Embarque com semáforo (simula agente num portão)
+
+# ─────────────────────────────────────────────
+# EMBARQUE (processo filho)
+# ─────────────────────────────────────────────
 def embarcar(p, semaforo, lock, portao_id, passageiros_em_espera):
     with semaforo:
         inicio = time.time()
         espera = inicio - p["chegada"]
-        hora_embarque = datetime.now().strftime("%H:%M:%S")
 
-        # Tempo variável conforme prioridade
-        if p["prioridade"] == "alta":
-            tempo_embarque = random.uniform(0.5, 1.5)
-        elif p["prioridade"] == "media":
-            tempo_embarque = random.uniform(1, 2.5)
-        else:
-            tempo_embarque = random.uniform(2, 3.5)
+        duracao = {"alta": (0.5, 1.5), "media": (1.0, 2.5), "baixa": (2.0, 3.5)}
+        t_emb   = random.uniform(*duracao[p["prioridade"]])
 
-        agente_id = portao_id  # agente associado ao portão
+        cp = cor_prioridade(p["prioridade"])
+        ip = ICONE_PRIORIDADE[p["prioridade"]]
 
-        msg_inicio = (
-            f"[EMBARQUE INICIO] Passageiro {p['id']} | Prioridade: {p['prioridade']} | "
-            f"Portão {portao_id} | Agente {agente_id} | "
-            f"Hora: {hora_embarque} | Espera: {espera:.2f}s"
-        )
-        print(msg_inicio)
-        escrever_log(lock, msg_inicio)
+        corpo_ini = (f"P{p['id']:02d}  Portao {COR['azul']}G{portao_id}{COR['reset']}  "
+                     f"Agente {COR['magenta']}A{portao_id}{COR['reset']}  "
+                     f"Prioridade: {cp}{ip}{COR['reset']}  "
+                     f"Espera: {COR['amarelo']}{espera:.1f}s{COR['reset']}")
+        imprimir_e_log(lock, "EMBARQUE INÍCIO", corpo_ini)
 
-        time.sleep(tempo_embarque)
+        time.sleep(t_emb)
 
-        fim = time.time()
-        hora_fim = datetime.now().strftime("%H:%M:%S")
+        corpo_fim = (f"P{p['id']:02d}  Portao {COR['azul']}G{portao_id}{COR['reset']}  "
+                     f"Duracao: {COR['verde']}{t_emb:.1f}s{COR['reset']}")
+        imprimir_e_log(lock, "EMBARQUE FIM", corpo_fim)
 
-        msg_fim = (
-            f"[EMBARQUE FIM] Passageiro {p['id']} | Portão {portao_id} | "
-            f"Hora: {hora_fim} | Duração: {tempo_embarque:.2f}s"
-        )
-        print(msg_fim)
-        escrever_log(lock, msg_fim)
-
-        # Decrementar contador partilhado
         with passageiros_em_espera.get_lock():
             passageiros_em_espera.value -= 1
 
-# Servidor (processo servidor / aeroporto)
-def servidor(fila, total_passageiros, semaforo, lock, passageiros_em_espera):
-    fila_embarque = []
-    processados = 0
+
+# ─────────────────────────────────────────────
+# PROCESSO SERVIDOR (aeroporto)
+# ─────────────────────────────────────────────
+def servidor(fila, total, semaforo, lock, passageiros_em_espera):
+    fila_embarque      = []
+    processados        = 0
     processos_embarque = []
-    portao_atual = Value('i', 1)  # memória partilhada para rotação de portões
+    portao_atual       = Value("i", 1)
 
-    print(f"[SERVIDOR] Aeroporto iniciado. Aguardando {total_passageiros} passageiros...")
-    escrever_log(lock, f"[SERVIDOR] Aeroporto iniciado. Total esperado: {total_passageiros} passageiros.")
+    imprimir_e_log(lock, "SERVIDOR",
+                   f"Aeroporto iniciado  |  Portoes: {NUM_PORTOES}  |  "
+                   f"Passageiros esperados: {total}")
+    print(linha_divisoria(), flush=True)
 
-    while processados < total_passageiros:
+    while processados < total:
 
-        # Receber passageiros da fila
         while not fila.empty():
-            p = fila.get()
-            fila_embarque.append(p)
+            fila_embarque.append(fila.get())
 
-        # Verificar desistências
         nova_fila = []
         for p in fila_embarque:
-            tempo_espera = time.time() - p["chegada"]
-            if tempo_espera > TEMPO_MAX_ESPERA:
-                msg = (
-                    f"[DESISTIU] Passageiro {p['id']} | Prioridade: {p['prioridade']} | "
-                    f"Espera: {tempo_espera:.2f}s (limite atingido)"
-                )
-                print(msg)
-                escrever_log(lock, msg)
+            espera = time.time() - p["chegada"]
+            if espera > TEMPO_MAX_ESPERA:
+                cp = cor_prioridade(p["prioridade"])
+                ip = ICONE_PRIORIDADE[p["prioridade"]]
+                corpo = (f"P{p['id']:02d}  Prioridade: {cp}{ip}{COR['reset']}  "
+                         f"Espera: {COR['vermelho']}{espera:.1f}s "
+                         f"(limite atingido){COR['reset']}")
+                imprimir_e_log(lock, "DESISTIU", corpo)
                 processados += 1
                 with passageiros_em_espera.get_lock():
                     passageiros_em_espera.value -= 1
             else:
                 nova_fila.append(p)
-
         fila_embarque = nova_fila
 
-        # Ordenar por prioridade (alta > media > baixa), desempate por chegada
-        fila_embarque.sort(key=lambda p: (prioridade_ordem[p["prioridade"]], p["chegada"]))
+        fila_embarque.sort(key=lambda x: (prioridade_ordem[x["prioridade"]], x["chegada"]))
 
-        # Mostrar estado atual da fila
         if fila_embarque:
-            estado = ", ".join([f"P{p['id']}({p['prioridade']})" for p in fila_embarque])
-            print(f"[FILA] Em espera ({passageiros_em_espera.value}): {estado}")
+            partes = []
+            for p in fila_embarque:
+                cp = cor_prioridade(p["prioridade"])
+                partes.append(f"{cp}P{p['id']:02d}{COR['reset']}")
+            em_espera = passageiros_em_espera.value
+            corpo_fila = (f"Em espera ({COR['bold']}{em_espera}{COR['reset']}): "
+                          + " > ".join(partes))
+            imprimir_e_log(lock, "FILA", corpo_fila)
 
-        # Embarcar o próximo passageiro com portão atribuído
         if fila_embarque:
             p = fila_embarque.pop(0)
-
-            # Atribuir portão em rotação (memória partilhada)
             with portao_atual.get_lock():
                 portao = portao_atual.value
                 portao_atual.value = (portao_atual.value % NUM_PORTOES) + 1
 
-            proc = Process(target=embarcar, args=(p, semaforo, lock, portao, passageiros_em_espera))
+            proc = Process(
+                target=embarcar,
+                args=(p, semaforo, lock, portao, passageiros_em_espera)
+            )
             proc.start()
             processos_embarque.append(proc)
             processados += 1
@@ -144,34 +217,46 @@ def servidor(fila, total_passageiros, semaforo, lock, passageiros_em_espera):
     for proc in processos_embarque:
         proc.join()
 
-    msg_fim = "[SERVIDOR] Todos os passageiros processados. Encerrando aeroporto."
-    print(msg_fim)
-    escrever_log(lock, msg_fim)
+    print(linha_divisoria("═"), flush=True)
+    imprimir_e_log(lock, "SERVIDOR",
+                   "Todos os passageiros processados. Aeroporto encerrado.")
 
+
+# ─────────────────────────────────────────────
 # MAIN
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    open("log.txt", "w").close()  # Limpar log anterior
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-    fila = Queue()
-    lock = Lock()
-    semaforo = Semaphore(NUM_PORTOES)
+    open("log.txt", "w", encoding="utf-8").close()
 
-    # Memória partilhada: contador de passageiros atualmente em espera
-    passageiros_em_espera = Value('i', 0)
+    fila                  = Queue()
+    lock                  = Lock()
+    semaforo              = Semaphore(NUM_PORTOES)
+    passageiros_em_espera = Value("i", 0)
 
-    total_passageiros = 10
+    print()
+    print(linha_divisoria("═"))
+    print(f"  {COR['bold']}{COR['ciano']}  SIMULACAO DE EMBARQUE — AEROPORTO  {COR['reset']}")
+    print(linha_divisoria("═"))
+    print()
+
     processos = []
-
-    # Criar e lançar processos dos passageiros
-    for i in range(total_passageiros):
-        p = Process(target=passageiro, args=(i, fila, lock, passageiros_em_espera))
+    for i in range(TOTAL_PASSAGEIROS):
+        p = Process(target=passageiro,
+                    args=(i, fila, lock, passageiros_em_espera))
         processos.append(p)
         p.start()
 
-    # Lançar o servidor
-    servidor(fila, total_passageiros, semaforo, lock, passageiros_em_espera)
+    servidor(fila, TOTAL_PASSAGEIROS, semaforo, lock, passageiros_em_espera)
 
     for p in processos:
         p.join()
 
-    print("\n[FIM] Simulação concluída. Consulta o ficheiro log.txt para detalhes.")
+    print()
+    print(linha_divisoria("═"))
+    print(f"  {COR["bold"]}Simulacao concluida. Consulta o ficheiro {COR["ciano"]}log.txt{COR["reset"]}{COR["bold"]} para detalhes.{COR["reset"]}")
+    print(linha_divisoria("═"))
+    print()
